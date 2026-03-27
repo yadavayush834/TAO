@@ -1,0 +1,16 @@
+# Render Blueprint — TAO Guard
+# Deploy: https://taoguard.onrender.com
+
+services:
+  - type: web
+    name: taoguard
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: SIMULATION_MODE
+        value: "true"
+      - key: PYTHON_VERSION
+        value: "3.11.11"
+      - key: HOST
+        value: "0.0.0.0"

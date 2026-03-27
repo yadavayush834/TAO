@@ -1,29 +1,88 @@
 /**
- * TAO Dashboard — Main Application Logic
+ * TAO — Unified Application Logic
+ *
+ * Combines Dashboard (pipeline analysis) and Judge AI Chat
+ * into a single-page application with sidebar tab navigation.
  *
  * Manages:
- * - API communication (REST + WebSocket)
- * - Pipeline state and visualization
- * - Panel rendering for all tiers
- * - Real-time event streaming
+ * - View switching (Dashboard ↔ Chat)
+ * - Dashboard: API communication, pipeline state, panel rendering
+ * - Chat: Message sending, judge verdicts, flow diagram
+ * - Mobile sidebar toggle
  */
 
 // ─── Configuration ──────────────────────────────────────────
 const API_BASE = window.location.origin;
-const WS_BASE = `ws://${window.location.host}`;
+const WS_BASE = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
+
+// ═══════════════════════════════════════════════════════════
+// VIEW SWITCHING
+// ═══════════════════════════════════════════════════════════
+
+const navTabs = document.querySelectorAll('.nav-tab');
+const views = document.querySelectorAll('.view');
+const mobileToggle = document.getElementById('mobile-toggle');
+const sidebar = document.getElementById('sidebar');
+const sidebarOverlay = document.getElementById('sidebar-overlay');
+
+function switchView(viewName) {
+  // Update tabs
+  navTabs.forEach(tab => {
+    tab.classList.toggle('active', tab.dataset.view === viewName);
+  });
+
+  // Update views
+  views.forEach(view => {
+    view.classList.toggle('active', view.id === `view-${viewName}`);
+  });
+
+  // Close mobile sidebar
+  sidebar.classList.remove('open');
+
+  // Update document title
+  if (viewName === 'dashboard') {
+    document.title = 'TAO — Pipeline Dashboard';
+  } else {
+    document.title = 'TAO — Judge AI Chat';
+  }
+}
+
+navTabs.forEach(tab => {
+  tab.addEventListener('click', () => switchView(tab.dataset.view));
+});
+
+// Mobile sidebar toggle
+if (mobileToggle) {
+  mobileToggle.addEventListener('click', () => {
+    sidebar.classList.toggle('open');
+  });
+}
+
+if (sidebarOverlay) {
+  sidebarOverlay.addEventListener('click', () => {
+    sidebar.classList.remove('open');
+  });
+}
+
+
+// ═══════════════════════════════════════════════════════════
+// DASHBOARD LOGIC
+// ═══════════════════════════════════════════════════════════
 
 // ─── State ──────────────────────────────────────────────────
 let isAnalyzing = false;
 let currentResult = null;
 let ws = null;
 
-// ─── DOM References ─────────────────────────────────────────
+// ─── DOM References — Dashboard ─────────────────────────────
 const queryInput = document.getElementById('query-input');
 const analyzeBtn = document.getElementById('analyze-btn');
 const tierSelect = document.getElementById('tier-select');
-const presets = document.getElementById('presets');
+const presetContainer = document.getElementById('presets');
 const statusBadge = document.getElementById('status-badge');
 const statusText = document.getElementById('status-text');
+const sidebarStatus = document.getElementById('sidebar-status');
+const sidebarStatusText = document.getElementById('sidebar-status-text');
 
 // Pipeline nodes
 const nodeRouter = document.getElementById('node-router');
@@ -55,7 +114,10 @@ const badgeMetrics = document.getElementById('badge-metrics');
 // ─── Init ───────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
   checkConfig();
-  setupEventListeners();
+  setupDashboardListeners();
+  setupChatListeners();
+  checkOllama();
+  loadChatConfig();
 });
 
 async function checkConfig() {
@@ -63,18 +125,24 @@ async function checkConfig() {
     const res = await fetch(`${API_BASE}/api/config`);
     const config = await res.json();
     if (config.simulation_mode) {
-      statusBadge.className = 'status-badge simulation';
+      statusBadge.className = 'sidebar-status simulation';
       statusText.textContent = 'Simulation';
+      sidebarStatus.className = 'sidebar-status simulation';
+      sidebarStatusText.textContent = 'Simulation Mode';
     } else {
-      statusBadge.className = 'status-badge live';
+      statusBadge.className = 'sidebar-status connected';
       statusText.textContent = 'Live';
+      sidebarStatus.className = 'sidebar-status connected';
+      sidebarStatusText.textContent = 'Live Mode';
     }
   } catch (e) {
     statusText.textContent = 'Offline';
+    sidebarStatusText.textContent = 'Server Offline';
+    sidebarStatus.className = 'sidebar-status disconnected';
   }
 }
 
-function setupEventListeners() {
+function setupDashboardListeners() {
   analyzeBtn.addEventListener('click', () => analyzeQuery());
 
   queryInput.addEventListener('keydown', (e) => {
@@ -84,9 +152,9 @@ function setupEventListeners() {
     }
   });
 
-  presets.addEventListener('click', (e) => {
+  presetContainer.addEventListener('click', (e) => {
     const btn = e.target.closest('.preset-btn');
-    if (btn) {
+    if (btn && !btn.classList.contains('quick-prompt')) {
       queryInput.value = btn.dataset.query;
       queryInput.focus();
     }
@@ -111,10 +179,8 @@ async function analyzeQuery() {
   };
 
   try {
-    // Try WebSocket first for real-time streaming
     const wsOk = await analyzeViaWebSocket(body);
     if (!wsOk) {
-      // Fallback to REST
       await analyzeViaREST(body);
     }
   } catch (err) {
@@ -157,7 +223,6 @@ async function analyzeViaWebSocket(body) {
         if (!resolved) { resolved = true; resolve(false); }
       };
 
-      // Timeout fallback
       setTimeout(() => {
         if (!resolved) { resolved = true; resolve(false); ws.close(); }
       }, 30000);
@@ -168,7 +233,6 @@ async function analyzeViaWebSocket(body) {
 }
 
 async function analyzeViaREST(body) {
-  // Show routing animation
   setNodeState(nodeRouter, 'active');
 
   const res = await fetch(`${API_BASE}/api/analyze`, {
@@ -185,36 +249,31 @@ async function analyzeViaREST(body) {
 
 // ─── Pipeline Event Handling ──────────────────────────────
 function handlePipelineEvent(event) {
-  const { event_type, tier, data } = event;
+  const { event_type, data } = event;
 
   switch (event_type) {
     case 'routing':
       setNodeState(nodeRouter, 'active');
       setBadge(badgeResponse, 'active', 'Routing');
       break;
-
     case 'routing_complete':
       setNodeState(nodeRouter, 'completed');
       setConnectorActive(0);
       renderRouting(data);
       break;
-
     case 'tier1_start':
       setNodeState(nodeTier1, 'active');
       setBadge(badgeTier1, 'active', 'Processing');
       break;
-
     case 'tier1_complete':
       setNodeState(nodeTier1, data.passed ? 'completed' : 'flagged');
       setConnectorActive(1);
       setBadge(badgeTier1, data.passed ? 'passed' : 'flagged', data.passed ? 'Passed' : 'Flagged');
       break;
-
     case 'tier2_start':
       setNodeState(nodeTier2, 'active');
       setBadge(badgeTier2, 'active', 'Debating');
       break;
-
     case 'tier2_complete':
       const t2class = data.verdict === 'prover_wins' ? 'completed' : 'flagged';
       setNodeState(nodeTier2, t2class);
@@ -222,19 +281,16 @@ function handlePipelineEvent(event) {
       setBadge(badgeTier2, t2class === 'completed' ? 'passed' : 'flagged',
         data.verdict.replace('_', ' '));
       break;
-
     case 'tier3_start':
       setNodeState(nodeTier3, 'active');
       setBadge(badgeTier3, 'active', 'Scanning');
       break;
-
     case 'tier3_complete':
       setNodeState(nodeTier3, data.alert_triggered ? 'flagged' : 'completed');
       setConnectorActive(3);
       setBadge(badgeTier3, data.alert_triggered ? 'flagged' : 'passed',
         data.alert_triggered ? 'Alert' : 'Clear');
       break;
-
     case 'pipeline_complete':
       setNodeState(nodeOutput, 'completed');
       break;
@@ -243,7 +299,6 @@ function handlePipelineEvent(event) {
 
 // ─── Rendering ──────────────────────────────────────────────
 function renderFullResult(result) {
-  // Finalize pipeline visualization
   const maxTier = result.routing.tier;
   setNodeState(nodeRouter, 'completed');
   setConnectorActive(0);
@@ -274,7 +329,6 @@ function renderFullResult(result) {
   setNodeState(nodeOutput, 'completed');
   if (maxTier < 2) setConnectorActive(connectors.length - 1 > maxTier ? maxTier + 1 : maxTier);
 
-  // Render panels
   renderRouting(result.routing);
   renderResponse(result);
   renderTier1(result.tier1_result);
@@ -290,7 +344,6 @@ function renderRouting(routing) {
 
   setBadge(badgeResponse, 'passed', tierLabel);
 
-  // Prepend routing info to response panel
   const existing = responseBody.querySelector('.routing-info');
   if (existing) existing.remove();
 
@@ -309,7 +362,6 @@ function renderRouting(routing) {
 }
 
 function renderResponse(result) {
-  // Remove old response content (keep routing info)
   const oldRes = responseBody.querySelector('.response-content');
   if (oldRes) oldRes.remove();
   const oldData = responseBody.querySelector('.no-data');
@@ -332,7 +384,6 @@ function renderTier1(tier1) {
 
   let html = '';
 
-  // CoT Steps
   if (tier1.generation?.cot_steps?.length) {
     html += '<div class="cot-steps animate-in">';
     for (const step of tier1.generation.cot_steps) {
@@ -350,7 +401,6 @@ function renderTier1(tier1) {
     html += '</div>';
   }
 
-  // Violations
   if (tier1.violations?.length) {
     html += '<div class="violations-list" style="margin-top: 16px;">';
     for (const v of tier1.violations) {
@@ -369,12 +419,11 @@ function renderTier1(tier1) {
     html += '</div>';
   }
 
-  // Reasoning anomaly
   if (tier1.reasoning_anomaly) {
     html += `
-      <div class="violation-card animate-slide" style="margin-top: 12px; border-color: rgba(245, 158, 11, 0.3);">
+      <div class="violation-card animate-slide" style="margin-top: 12px; border-color: rgba(245, 158, 11, 0.2);">
         <div class="violation-header">
-          <span class="violation-type" style="background: rgba(245, 158, 11, 0.15); color: var(--color-warning);">
+          <span class="violation-type" style="background: rgba(245, 158, 11, 0.1); color: var(--color-warning);">
             REASONING ANOMALY
           </span>
         </div>
@@ -395,7 +444,6 @@ function renderTier2(tier2) {
     return;
   }
 
-  const verdictClass = `verdict-${tier2.verdict.replace('_', '')}`;
   setBadge(badgeTier2,
     tier2.verdict === 'prover_wins' ? 'passed' : 'flagged',
     tier2.verdict.replace(/_/g, ' ')
@@ -438,12 +486,12 @@ function renderTier2(tier2) {
 
   html += '</div>';
 
-  // Verdict + Swap Test
+  const verdictClass = `verdict-${tier2.verdict.replace('_', '')}`;
   const swapClass = tier2.swap_test_passed ? 'swap-passed' : 'swap-failed';
   const swapText = tier2.swap_test_passed ? '✓ Swap Test Passed' : '✗ Positional Bias Detected';
 
   html += `
-    <div class="debate-verdict animate-in" style="margin-top: 12px; padding: 14px; background: var(--bg-primary); border-radius: var(--radius-sm);">
+    <div class="debate-verdict animate-in" style="margin-top: 12px; padding: 14px; background: var(--bg-secondary); border-radius: var(--radius-sm);">
       <span class="verdict-label ${verdictClass}">
         Verdict: ${tier2.verdict.replace(/_/g, ' ').toUpperCase()}
       </span>
@@ -481,7 +529,6 @@ function renderTier3(tier3) {
     </div>
   `;
 
-  // Token heatmap
   if (stego.token_analyses?.length) {
     html += '<div style="margin-top: 16px;"><div class="query-label" style="margin-bottom: 8px;">Token Perplexity Heatmap</div>';
     html += '<div class="token-heatmap">';
@@ -493,7 +540,6 @@ function renderTier3(tier3) {
     html += '</div></div>';
   }
 
-  // Paraphrase comparison
   if (tier3.paraphrased) {
     html += `
       <div style="margin-top: 16px;">
@@ -550,7 +596,6 @@ function renderMetrics(metrics, routing) {
     </div>
   `;
 
-  // Latency waterfall
   const maxLatency = Math.max(
     metrics.routing_latency_ms || 0,
     metrics.tier1_latency_ms || 0,
@@ -586,7 +631,7 @@ function waterfallRow(label, value, max, cls) {
   `;
 }
 
-// ─── Pipeline Visualization Helpers ─────────────────────────
+// ─── Pipeline Helpers ───────────────────────────────────────
 function resetPipeline() {
   [nodeRouter, nodeTier1, nodeTier2, nodeTier3, nodeOutput].forEach(n => {
     n.className = 'pipeline-node';
@@ -594,8 +639,6 @@ function resetPipeline() {
   connectors.forEach(c => {
     c.className = 'pipeline-connector';
   });
-
-  // Reset badges
   [badgeResponse, badgeTier1, badgeTier2, badgeTier3, badgeMetrics].forEach(b => {
     b.className = 'panel-badge badge-idle';
     b.textContent = 'Idle';
@@ -617,7 +660,265 @@ function setBadge(badge, type, text) {
   badge.textContent = text;
 }
 
-// ─── Utilities ──────────────────────────────────────────────
+
+// ═══════════════════════════════════════════════════════════
+// CHAT LOGIC (Judge AI)
+// ═══════════════════════════════════════════════════════════
+
+// ─── DOM Refs — Chat ────────────────────────────────────────
+const chatMessages = document.getElementById('chat-messages');
+const chatInput = document.getElementById('chat-input');
+const sendBtn = document.getElementById('send-btn');
+const ollamaStatus = document.getElementById('ollama-status');
+const ollamaStatusText = document.getElementById('ollama-status-text');
+const ollamaStatusTopbar = document.getElementById('ollama-status-topbar');
+const ollamaStatusTopbarText = document.getElementById('ollama-status-topbar-text');
+
+// Config
+const cfgModel = document.getElementById('cfg-model');
+const cfgRetries = document.getElementById('cfg-retries');
+
+// Verdict panel
+const verdictCard = document.getElementById('verdict-card');
+const verdictBadge = document.getElementById('verdict-badge');
+const verdictBody = document.getElementById('verdict-body');
+
+// Metrics
+const metricLatency = document.getElementById('metric-latency');
+const metricTokens = document.getElementById('metric-tokens');
+const metricAttempts = document.getElementById('metric-attempts');
+
+// Flow diagram steps
+const flowSteps = {
+  input: document.getElementById('flow-input'),
+  risk: document.getElementById('flow-risk'),
+  generate: document.getElementById('flow-generate'),
+  judge: document.getElementById('flow-judge'),
+  refine: document.getElementById('flow-refine'),
+  output: document.getElementById('flow-output'),
+};
+
+// Quick prompts
+document.querySelectorAll('.quick-prompt').forEach(btn => {
+  btn.addEventListener('click', () => {
+    chatInput.value = btn.dataset.query;
+    chatInput.focus();
+    // Switch to chat view if not already
+    switchView('chat');
+  });
+});
+
+function setupChatListeners() {
+  sendBtn.addEventListener('click', sendMessage);
+  chatInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendMessage();
+    }
+  });
+}
+
+// ─── Ollama Health ──────────────────────────────────────────
+async function checkOllama() {
+  try {
+    const res = await fetch(`${API_BASE}/chat/health`);
+    const data = await res.json();
+
+    if (data.status === 'healthy') {
+      const modelOk = data.generator_available ? '✓' : '✗';
+      const statusStr = `Ollama ${modelOk} ${data.generator_model}`;
+      ollamaStatus.className = 'sidebar-status connected';
+      ollamaStatusText.textContent = statusStr;
+      ollamaStatusTopbar.className = 'ollama-status connected';
+      ollamaStatusTopbarText.textContent = statusStr;
+    } else {
+      const errStr = data.error || 'Ollama offline';
+      ollamaStatus.className = 'sidebar-status disconnected';
+      ollamaStatusText.textContent = errStr;
+      ollamaStatusTopbar.className = 'ollama-status disconnected';
+      ollamaStatusTopbarText.textContent = errStr;
+    }
+  } catch {
+    ollamaStatus.className = 'sidebar-status disconnected';
+    ollamaStatusText.textContent = 'Server offline';
+    ollamaStatusTopbar.className = 'ollama-status disconnected';
+    ollamaStatusTopbarText.textContent = 'Server offline';
+  }
+}
+
+async function loadChatConfig() {
+  try {
+    const res = await fetch(`${API_BASE}/chat/config`);
+    const data = await res.json();
+    cfgModel.textContent = data.generator_model || '—';
+    cfgRetries.textContent = data.max_retries || '2';
+  } catch {
+    cfgModel.textContent = '—';
+  }
+}
+
+// ─── Send Message ───────────────────────────────────────────
+let isSending = false;
+
+async function sendMessage() {
+  const message = chatInput.value.trim();
+  if (!message || isSending) return;
+
+  isSending = true;
+  sendBtn.disabled = true;
+  chatInput.value = '';
+
+  addMessage(message, 'user');
+  const typingEl = addTypingIndicator();
+
+  resetFlow();
+  setFlowStep('input', 'done');
+  setFlowStep('risk', 'active');
+
+  try {
+    const res = await fetch(`${API_BASE}/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+      throw new Error(err.detail || `Server error ${res.status}`);
+    }
+
+    const data = await res.json();
+    typingEl.remove();
+    animateFlowForResult(data);
+    addMessage(data.response, 'assistant', data.risk);
+    updateVerdict(data);
+    updateChatMetrics(data);
+
+  } catch (err) {
+    typingEl.remove();
+    addMessage(`⚠️ Error: ${err.message}`, 'system-msg');
+    resetFlow();
+  } finally {
+    isSending = false;
+    sendBtn.disabled = false;
+    chatInput.focus();
+  }
+}
+
+// ─── Message Rendering ──────────────────────────────────────
+function addMessage(content, type, risk) {
+  const msg = document.createElement('div');
+  msg.className = `chat-msg ${type}`;
+
+  let meta = '';
+  if (type === 'user') {
+    meta = '<div class="msg-meta"><span class="msg-avatar user-avatar">👤</span> You</div>';
+  } else if (type === 'assistant') {
+    const riskBadge = risk
+      ? ` <span class="risk-badge risk-${risk.level}">${risk.level.toUpperCase()}</span>`
+      : '';
+    meta = `<div class="msg-meta"><span class="msg-avatar ai-avatar">⚖️</span> Judge AI${riskBadge}</div>`;
+  }
+
+  msg.innerHTML = meta + escapeHtml(content);
+  chatMessages.appendChild(msg);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+  return msg;
+}
+
+function addTypingIndicator() {
+  const el = document.createElement('div');
+  el.className = 'typing-indicator';
+  el.innerHTML = '<span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span>';
+  chatMessages.appendChild(el);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+  return el;
+}
+
+// ─── Flow Diagram ───────────────────────────────────────────
+function resetFlow() {
+  Object.values(flowSteps).forEach(el => {
+    if (el) el.classList.remove('active', 'done');
+  });
+}
+
+function setFlowStep(step, state) {
+  const el = flowSteps[step];
+  if (!el) return;
+  el.classList.remove('active', 'done');
+  el.classList.add(state);
+}
+
+function animateFlowForResult(data) {
+  setFlowStep('input', 'done');
+  setFlowStep('risk', 'done');
+  setFlowStep('generate', 'done');
+  setFlowStep('judge', 'done');
+  if (data.attempts && data.attempts.length > 1) {
+    setFlowStep('refine', 'done');
+  }
+  setFlowStep('output', 'done');
+}
+
+// ─── Verdict Sidebar ────────────────────────────────────────
+function updateVerdict(data) {
+  const { attempts, risk, final_decision } = data;
+
+  verdictCard.className = `judge-card ${final_decision === 'approve' ? 'approved' : 'rejected'}`;
+
+  verdictBadge.style.display = 'inline';
+  verdictBadge.className = `decision-badge decision-${final_decision}`;
+  verdictBadge.textContent = final_decision === 'approve' ? '✓ Approved' : '✗ Rejected';
+
+  let html = '';
+
+  html += `
+    <div style="margin-bottom: 12px;">
+      <span class="risk-badge risk-${risk.level}">${risk.level.toUpperCase()} — ${risk.domain}</span>
+      <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px;">${escapeHtml(risk.reasoning)}</div>
+    </div>
+  `;
+
+  html += '<div class="attempt-list">';
+  for (const step of attempts) {
+    const isApproved = step.judge_verdict.decision === 'approve';
+    const cls = isApproved ? 'approved' : 'rejected';
+    const badge = isApproved ? '✓ Approved' : '✗ Rejected';
+    const badgeCls = isApproved ? 'decision-approve' : 'decision-reject';
+
+    html += `
+      <div class="attempt-step ${cls}">
+        <div class="attempt-header">
+          <span>Attempt ${step.attempt}</span>
+          <span class="decision-badge ${badgeCls}">${badge}</span>
+        </div>
+        <div class="attempt-reason">${escapeHtml(step.judge_verdict.reason)}</div>
+        ${step.judge_verdict.fix ? `<div style="margin-top: 6px; font-size: 11px; color: var(--accent);">💡 Fix: ${escapeHtml(step.judge_verdict.fix).substring(0, 200)}${step.judge_verdict.fix.length > 200 ? '...' : ''}</div>` : ''}
+      </div>
+    `;
+  }
+  html += '</div>';
+
+  verdictBody.innerHTML = html;
+}
+
+function updateChatMetrics(data) {
+  metricLatency.textContent = data.total_latency_ms
+    ? `${(data.total_latency_ms / 1000).toFixed(1)}s`
+    : '—';
+  metricTokens.textContent = data.total_tokens
+    ? data.total_tokens.toLocaleString()
+    : '—';
+  metricAttempts.textContent = data.attempts
+    ? data.attempts.length
+    : '—';
+}
+
+
+// ═══════════════════════════════════════════════════════════
+// SHARED UTILITIES
+// ═══════════════════════════════════════════════════════════
+
 function escapeHtml(str) {
   if (!str) return '';
   const div = document.createElement('div');
@@ -635,7 +936,7 @@ function showError(message) {
   responseBody.innerHTML = `
     <div class="violation-card animate-in">
       <div class="violation-header">
-        <span class="violation-type" style="background: rgba(239, 68, 68, 0.15); color: var(--color-danger);">ERROR</span>
+        <span class="violation-type" style="background: rgba(239, 68, 68, 0.08); color: var(--color-danger);">ERROR</span>
       </div>
       <div class="violation-explanation">${escapeHtml(message)}</div>
     </div>

@@ -44,10 +44,6 @@ if frontend_dir.exists():
     async def serve_frontend():
         return FileResponse(str(frontend_dir / "index.html"))
 
-    @app.get("/chat-ui")
-    async def serve_chat_ui():
-        return FileResponse(str(frontend_dir / "chat.html"))
-
     @app.get("/index.css")
     async def serve_css():
         return FileResponse(str(frontend_dir / "index.css"))
@@ -55,10 +51,6 @@ if frontend_dir.exists():
     @app.get("/app.js")
     async def serve_js():
         return FileResponse(str(frontend_dir / "app.js"))
-
-    @app.get("/chat-app.js")
-    async def serve_chat_js():
-        return FileResponse(str(frontend_dir / "chat-app.js"))
 
 
 if __name__ == "__main__":

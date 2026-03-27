@@ -37,6 +37,7 @@ export async function getConfig() {
 }
 
 export function createWebSocket() {
-  const wsUrl = `ws://${window.location.host}/ws/pipeline`;
+  const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const wsUrl = `${wsProto}//${window.location.host}/ws/pipeline`;
   return new WebSocket(wsUrl);
 }
