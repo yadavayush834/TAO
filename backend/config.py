@@ -13,6 +13,8 @@ class TAOSettings(BaseSettings):
     # --- API Keys ---
     openai_api_key: Optional[str] = Field(default=None, alias="OPENAI_API_KEY")
     anthropic_api_key: Optional[str] = Field(default=None, alias="ANTHROPIC_API_KEY")
+    nvidia_nim_api_key: Optional[str] = Field(default=None, alias="NVIDIA_NIM_API_KEY")
+    google_api_key: Optional[str] = Field(default=None, alias="GOOGLE_API_KEY")
 
     # --- Mode ---
     simulation_mode: bool = Field(default=True, alias="SIMULATION_MODE")
