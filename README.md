@@ -37,9 +37,14 @@ User Query → [Complexity Router] → Tier Assignment
 
 ### 1. Setup
 ```bash
-cd /Users/atulharshvardhan/Desktop/TAO
+git clone https://github.com/Ultramaroon-Decency/TAO.git
+cd TAO
+
 python3 -m venv venv
-source venv/bin/activate
+source venv/bin/activate   # Linux/macOS
+# OR
+venv\Scripts\activate      # Windows
+
 pip install -r requirements.txt
 ```
 
